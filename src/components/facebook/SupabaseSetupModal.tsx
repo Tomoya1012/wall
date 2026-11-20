@@ -44,7 +44,16 @@ create policy "Public update" on public.posts for update using (true);
 create policy "Public delete" on public.posts for delete using (true);
 
 -- 4. Enable Supabase Realtime
-alter publication supabase_realtime add table public.posts;`;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'posts'
+  ) then
+    alter publication supabase_realtime add table public.posts;
+  end if;
+end $$;`;
 
   const copySql = () => {
     navigator.clipboard.writeText(sqlCode);

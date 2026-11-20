@@ -14,10 +14,14 @@ create table if not exists public.posts (
   likes_count integer not null default 0
 );
 
--- 2. Enable Row Level Security (RLS)
+-- 2. Grant table permissions to all roles
+grant usage on schema public to anon, authenticated, service_role;
+grant all on table public.posts to anon, authenticated, service_role;
+
+-- 3. Enable Row Level Security (RLS)
 alter table public.posts enable row level security;
 
--- 3. Create Public Policies (Allow anyone to read and post without authentication)
+-- 4. Create Public Policies (Allow anyone to read and post without authentication)
 drop policy if exists "Allow public read access" on public.posts;
 create policy "Allow public read access"
   on public.posts for select
@@ -38,14 +42,19 @@ create policy "Allow public delete access"
   on public.posts for delete
   using (true);
 
--- 4. Enable Supabase Realtime for instant updates without page refresh
-begin;
-  -- Remove first if already present to avoid duplication error
-  alter publication supabase_realtime drop table if exists public.posts;
-  alter publication supabase_realtime add table public.posts;
-commit;
+-- 5. Safely Enable Supabase Realtime
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'posts'
+  ) then
+    alter publication supabase_realtime add table public.posts;
+  end if;
+end $$;
 
--- 5. Seed nostalgic 2008 starter Wall posts
+-- 6. Seed nostalgic 2008 starter Wall posts
 insert into public.posts (author_name, message, created_at, avatar_url, likes_count, photo_url)
 values
   (
