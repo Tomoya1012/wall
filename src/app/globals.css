@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --fb-blue: #3b5998;
+  --fb-dark-blue: #2b4170;
+  --fb-light: #eceff6;
+  --fb-border: #d8dfea;
+  --fb-text: #333333;
+}
+
+body {
+  font-family: "Lucida Grande", Tahoma, Verdana, Arial, sans-serif;
+  background-color: #eceff6;
+  color: #333333;
+  margin: 0;
+  padding: 0;
+}
+
+/* Authentic Facebook custom scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #b0b0b0;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #888888;
+}
