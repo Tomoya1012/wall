@@ -4,6 +4,8 @@ import { WallPost } from "@/types";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+export const isSecretKey = Boolean(supabaseAnonKey?.startsWith("sb_secret_"));
+
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
   supabaseAnonKey &&
@@ -40,15 +42,6 @@ export const INITIAL_DEMO_POSTS: WallPost[] = [
     likes_count: 42,
     photo_url: null,
   },
-  {
-    id: "demo-post-4",
-    author_name: "Mark Zuckerberg",
-    message: "is wondering if anyone knows a good pho place in Kirkland or Palo Alto open past midnight.",
-    created_at: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-    avatar_url: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
-    likes_count: 8,
-    photo_url: null,
-  },
 ];
 
 let supabaseInstance: SupabaseClient | null = null;
@@ -57,12 +50,24 @@ export function getSupabase(): SupabaseClient | null {
   if (!isSupabaseConfigured) {
     return null;
   }
+
+  // If running in browser and the key is a secret key (sb_secret_),
+  // do NOT initialize browser client directly because Supabase throws "Forbidden use of secret API key in browser"
+  if (typeof window !== "undefined" && isSecretKey) {
+    return null;
+  }
+
   if (!supabaseInstance) {
-    supabaseInstance = createClient(supabaseUrl!, supabaseAnonKey!, {
-      auth: {
-        persistSession: false,
-      },
-    });
+    try {
+      supabaseInstance = createClient(supabaseUrl!, supabaseAnonKey!, {
+        auth: {
+          persistSession: false,
+        },
+      });
+    } catch (e) {
+      console.warn("Could not initialize Supabase browser client:", e);
+      return null;
+    }
   }
   return supabaseInstance;
 }
@@ -94,38 +99,50 @@ export function saveLocalPosts(posts: WallPost[]) {
 }
 
 /**
- * Fetch latest 50 posts from Supabase or fallback
+ * Fetch latest 50 posts from API route or Supabase client
  */
 export async function fetchWallPosts(): Promise<{ posts: WallPost[]; error?: string; isLive: boolean }> {
-  const supabase = getSupabase();
-  if (!supabase) {
+  if (!isSupabaseConfigured) {
     return {
       posts: getLocalPosts(),
       isLive: false,
     };
   }
 
+  // Use API route (works both with anon key and secret key safely without browser restrictions)
   try {
-    const { data, error } = await supabase
-      .from("posts")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50);
-
-    if (error) {
-      console.warn("Supabase fetch error, using local fallback:", error.message);
-      return { posts: getLocalPosts(), error: error.message, isLive: false };
+    const res = await fetch("/api/posts", { cache: "no-store" });
+    if (res.ok) {
+      const data = await res.json();
+      return { posts: data as WallPost[], isLive: true };
     }
-
-    return { posts: (data as WallPost[]) || [], isLive: true };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to load posts";
-    return { posts: getLocalPosts(), error: message, isLive: false };
+  } catch (e) {
+    console.warn("API route fetch error:", e);
   }
+
+  // Fallback to direct client if available
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("posts")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (!error && data) {
+        return { posts: data as WallPost[], isLive: true };
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  return { posts: getLocalPosts(), isLive: false };
 }
 
 /**
- * Create a new post in Supabase (or fallback)
+ * Create a new post via API route or Supabase
  */
 export async function createWallPost(post: {
   author_name: string;
@@ -133,85 +150,70 @@ export async function createWallPost(post: {
   photo_url?: string | null;
   avatar_url?: string | null;
 }): Promise<{ post?: WallPost; error?: string }> {
-  const supabase = getSupabase();
-
-  const newPostData = {
-    id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `post-${Date.now()}`,
-    author_name: post.author_name.trim() || "Anonymous Friend",
-    message: post.message.trim(),
-    created_at: new Date().toISOString(),
-    photo_url: post.photo_url || null,
-    avatar_url: post.avatar_url || null,
-    likes_count: 0,
-  };
-
-  if (!supabase) {
+  if (!isSupabaseConfigured) {
+    const newPostData: WallPost = {
+      id: `post-${Date.now()}`,
+      author_name: post.author_name.trim() || "Anonymous Friend",
+      message: post.message.trim(),
+      created_at: new Date().toISOString(),
+      photo_url: post.photo_url || null,
+      avatar_url: post.avatar_url || null,
+      likes_count: 0,
+    };
     const current = getLocalPosts();
-    const updated = [newPostData, ...current];
-    saveLocalPosts(updated);
+    saveLocalPosts([newPostData, ...current]);
     return { post: newPostData };
   }
 
   try {
-    const { data, error } = await supabase
-      .from("posts")
-      .insert([
-        {
-          author_name: newPostData.author_name,
-          message: newPostData.message,
-          photo_url: newPostData.photo_url,
-          avatar_url: newPostData.avatar_url,
-        },
-      ])
-      .select()
-      .single();
+    const res = await fetch("/api/posts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(post),
+    });
 
-    if (error) {
-      console.warn("Supabase insert error, saving locally:", error.message);
-      const current = getLocalPosts();
-      saveLocalPosts([newPostData, ...current]);
-      return { post: newPostData, error: error.message };
+    if (res.ok) {
+      const newPost = await res.json();
+      return { post: newPost as WallPost };
+    } else {
+      const err = await res.json();
+      return { error: err.error || "Failed to create post" };
     }
-
-    return { post: data as WallPost };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Error inserting post";
-    return { error: message };
+    const msg = err instanceof Error ? err.message : "Error posting to server";
+    return { error: msg };
   }
 }
 
 /**
- * Delete a post
+ * Delete a post via API route
  */
 export async function deleteWallPost(id: string): Promise<boolean> {
-  const supabase = getSupabase();
-  if (supabase) {
-    try {
-      await supabase.from("posts").delete().eq("id", id);
-    } catch (e) {
-      console.error(e);
-    }
+  try {
+    await fetch(`/api/posts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch (e) {
+    console.error(e);
   }
 
-  // Also update local
   const current = getLocalPosts();
   saveLocalPosts(current.filter((p) => p.id !== id));
   return true;
 }
 
 /**
- * Like a post
+ * Like a post via API route
  */
 export async function likeWallPost(id: string, currentLikes: number = 0): Promise<number> {
   const newLikes = currentLikes + 1;
-  const supabase = getSupabase();
 
-  if (supabase) {
-    try {
-      await supabase.from("posts").update({ likes_count: newLikes }).eq("id", id);
-    } catch (e) {
-      console.error(e);
-    }
+  try {
+    await fetch("/api/posts/like", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, currentLikes }),
+    });
+  } catch (e) {
+    console.error(e);
   }
 
   const current = getLocalPosts();
